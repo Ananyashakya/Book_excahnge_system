@@ -39,7 +39,7 @@ The application allows users to browse, search, and list books, while facilitati
 
 ## Installation
 
-    ```bash
+    ```
     git clone https://github.com/Ananyashakya/Book_excahnge_system.git
     cd Book_excahnge_system
     pip install mysql-connector-python ttkbootstrap bcrypt
