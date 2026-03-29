@@ -47,9 +47,9 @@ The application allows users to browse, search, and list books, while facilitati
 ## Database
 The system uses three core tables:
 
-users — stores user credentials and roles
-books — stores book listings and availability
-transactions — manages exchange requests and status
+- users — stores user credentials and roles
+- books — stores book listings and availability
+- transactions — manages exchange requests and status
 
 ## Project Structure
     ```
@@ -62,8 +62,8 @@ transactions — manages exchange requests and status
 
 ## Default Admin Access
 
-Email: admin@bookexchange.com
-Password: Admin@2025!
+- Email: admin@bookexchange.com
+- Password: Admin@2025!
 
 ## Summary
 BookSwap demonstrates a complete desktop-based CRUD system with authentication, role-based access, and transactional workflows. The project highlights backend logic design, database integration, and secure application development practices.
