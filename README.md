@@ -52,7 +52,7 @@ books — stores book listings and availability
 transactions — manages exchange requests and status
 
 ## Project Structure
-    ```bash
+    ```
     Book_excahnge_system/
     ├── main.py
     ├── database.py
