@@ -5,9 +5,9 @@
 
 USE BookExchangeDB;
 
--- Create library user if not exists
-INSERT IGNORE INTO users (id, name, email, password, is_admin)
-VALUES (2, 'BookSwap Library', 'library@bookswap.com', SHA2('library123', 256), 0);
+-- -- Create library user if not exists
+-- INSERT IGNORE INTO users (id, name, email, password, is_admin)
+-- VALUES (2, 'BookSwap Library', 'library@bookswap.com', SHA2('library123', 256), 0);
 
 -- Clear old sample data
 DELETE FROM books WHERE owner_id = 2;

@@ -1,3 +1,7 @@
+"""
+database.py - Book Exchange System with all fixes applied
+"""
+
 import mysql.connector
 import bcrypt
 import os
@@ -13,33 +17,29 @@ DB_CONFIG = {
 
 # ─── CONNECTION ───────────────────────────────────────────────────────────────
 def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
+    try:
+        return mysql.connector.connect(**DB_CONFIG)
+    except Exception as e:
+        print("Database connection error:", e)
+        return None
 
-
-# ─── PASSWORD HELPERS (bcrypt) ────────────────────────────────────────────────
+# ─── PASSWORD HELPERS ────────────────────────────────────────────────────────
 def hash_password(password: str) -> str:
-    """
-    Bcrypt hash with auto-generated salt (cost factor 12).
-    Each call produces a unique hash — always use verify_password() to compare,
-    never a direct == check.
-    """
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12))
-    return hashed.decode("utf-8")   # stored as VARCHAR(256) in DB
-
+    return hashed.decode("utf-8")
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Securely compare a plain-text password against a stored bcrypt hash."""
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
-
 
 def is_valid_email(email: str) -> bool:
     return bool(re.match(r"^[\w\.-]+@[\w\.-]+\.\w{2,}$", email))
 
-
 # ─── SCHEMA SETUP ─────────────────────────────────────────────────────────────
 def initialize_db():
-    """Create tables if they don't exist and seed the admin account."""
     conn = get_connection()
+    if not conn:
+        print("Failed to connect to database during initialization.")
+        return
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -81,7 +81,21 @@ def initialize_db():
         )
     """)
 
-    # Seed admin with bcrypt hash
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reviews (
+            id         INT AUTO_INCREMENT PRIMARY KEY,
+            book_id    INT NOT NULL,
+            user_id    INT NOT NULL,
+            rating     TINYINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+            review     TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY one_review_per_user (book_id, user_id),
+            FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Seed admin
     cursor.execute("SELECT id FROM users WHERE is_admin=1 LIMIT 1")
     if cursor.fetchone() is None:
         cursor.execute(
@@ -92,16 +106,20 @@ def initialize_db():
     conn.commit()
     conn.close()
 
-
 # ─── USER OPERATIONS ──────────────────────────────────────────────────────────
 def register_user(name: str, email: str, password: str):
-    """Returns (True, user_id) or (False, error_message)."""
     if not is_valid_email(email):
         return False, "Invalid email format."
     if len(password) < 6:
         return False, "Password must be at least 6 characters."
+    if not any(c.isupper() for c in password):
+        return False, "Password must contain an uppercase letter."
+    if not any(c.isdigit() for c in password):
+        return False, "Password must contain a number."
 
     conn = get_connection()
+    if not conn:
+        return False, "Database connection failed."
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -115,31 +133,26 @@ def register_user(name: str, email: str, password: str):
     finally:
         conn.close()
 
-
 def authenticate_user(email: str, password: str):
-    """
-    Fetch user by email, then verify password using bcrypt.
-    Returns user dict or None.
-    """
     conn = get_connection()
+    if not conn:
+        return None
     cursor = conn.cursor(dictionary=True)
-    # Fetch the stored hash separately — bcrypt needs checkpw(), not SQL comparison
     cursor.execute(
         "SELECT id, name, email, password, is_admin FROM users WHERE email=%s",
         (email.strip().lower(),)
     )
     row = cursor.fetchone()
     conn.close()
-
     if row and verify_password(password, row["password"]):
-        # Remove password hash before returning — never expose it to the UI
         row.pop("password")
         return row
     return None
 
-
 def get_all_users():
     conn = get_connection()
+    if not conn:
+        return []
     cursor = conn.cursor(dictionary=True)
     cursor.execute(
         "SELECT id, name, email, is_admin, created_at FROM users ORDER BY created_at DESC"
@@ -148,13 +161,57 @@ def get_all_users():
     conn.close()
     return rows
 
+# ─── PROFILE / STATS ──────────────────────────────────────────────────────────
+def get_user_profile(user_id: int):
+    conn = get_connection()
+    if not conn:
+        return {}
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT id, name, email, created_at FROM users WHERE id=%s", (user_id,))
+    user = cursor.fetchone()
+
+    cursor.execute("SELECT COUNT(*) AS total FROM books WHERE owner_id=%s", (user_id,))
+    books_listed = cursor.fetchone()["total"]
+
+    cursor.execute("SELECT COUNT(*) AS total FROM books WHERE owner_id=%s AND is_available=1", (user_id,))
+    books_available = cursor.fetchone()["total"]
+
+    cursor.execute("""
+        SELECT COUNT(*) AS total FROM transactions
+        WHERE (requester_id=%s OR owner_id=%s) AND status='Completed'
+    """, (user_id, user_id))
+    exchanges_done = cursor.fetchone()["total"]
+
+    cursor.execute("""
+        SELECT COUNT(*) AS total FROM transactions
+        WHERE requester_id=%s AND status='Pending'
+    """, (user_id,))
+    pending_requests = cursor.fetchone()["total"]
+
+    cursor.execute("SELECT COUNT(*) AS total FROM reviews WHERE user_id=%s", (user_id,))
+    reviews_given = cursor.fetchone()["total"]
+
+    conn.close()
+
+    return {
+        "name":             user["name"],
+        "email":            user["email"],
+        "member_since":     str(user["created_at"])[:10],
+        "books_listed":     books_listed,
+        "books_available":  books_available,
+        "exchanges_done":   exchanges_done,
+        "pending_requests": pending_requests,
+        "reviews_given":    reviews_given,
+    }
 
 # ─── BOOK OPERATIONS ──────────────────────────────────────────────────────────
 def add_book(title: str, author: str, genre: str, condition: str, owner_id: int):
-    """Returns (True, book_id) or (False, error_message)."""
     if not title.strip() or not author.strip():
         return False, "Title and author are required."
     conn = get_connection()
+    if not conn:
+        return False, "Database connection failed."
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO books (title, author, genre, condition_, owner_id) VALUES (%s,%s,%s,%s,%s)",
@@ -165,35 +222,47 @@ def add_book(title: str, author: str, genre: str, condition: str, owner_id: int)
     conn.close()
     return True, book_id
 
-
 def get_available_books(search: str = ""):
     conn = get_connection()
+    if not conn:
+        return []
     cursor = conn.cursor(dictionary=True)
     if search:
         like = f"%{search}%"
         cursor.execute("""
-            SELECT b.id, b.title, b.author, b.genre, b.condition_, u.name AS owner
+            SELECT b.id, b.title, b.author, b.genre, b.condition_,
+                   u.name AS owner,
+                   ROUND(AVG(r.rating), 1) AS avg_rating,
+                   COUNT(r.id) AS review_count
             FROM books b
             JOIN users u ON b.owner_id = u.id
+            LEFT JOIN reviews r ON r.book_id = b.id
             WHERE b.is_available=1
               AND (b.title LIKE %s OR b.author LIKE %s OR b.genre LIKE %s)
+            GROUP BY b.id, b.title, b.author, b.genre, b.condition_, u.name
             ORDER BY b.listed_at DESC
         """, (like, like, like))
     else:
         cursor.execute("""
-            SELECT b.id, b.title, b.author, b.genre, b.condition_, u.name AS owner
+            SELECT b.id, b.title, b.author, b.genre, b.condition_,
+                   u.name AS owner,
+                   ROUND(AVG(r.rating), 1) AS avg_rating,
+                   COUNT(r.id) AS review_count
             FROM books b
             JOIN users u ON b.owner_id = u.id
+            LEFT JOIN reviews r ON r.book_id = b.id
             WHERE b.is_available=1
+            GROUP BY b.id, b.title, b.author, b.genre, b.condition_, u.name
             ORDER BY b.listed_at DESC
         """)
     rows = cursor.fetchall()
     conn.close()
     return rows
 
-
 def get_user_books(user_id: int):
     conn = get_connection()
+    if not conn:
+        return []
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
         SELECT id, title, author, genre, condition_, is_available, listed_at
@@ -203,10 +272,21 @@ def get_user_books(user_id: int):
     conn.close()
     return rows
 
-
 def delete_book(book_id: int, user_id: int, is_admin: bool = False):
     conn = get_connection()
+    if not conn:
+        return False
     cursor = conn.cursor()
+
+    # Prevent deletion if there are pending requests
+    cursor.execute("""
+        SELECT id FROM transactions 
+        WHERE book_id=%s AND status='Pending'
+    """, (book_id,))
+    if cursor.fetchone():
+        conn.close()
+        return False
+
     if is_admin:
         cursor.execute("DELETE FROM books WHERE id=%s", (book_id,))
     else:
@@ -218,40 +298,146 @@ def delete_book(book_id: int, user_id: int, is_admin: bool = False):
     conn.close()
     return affected > 0
 
+# ─── REVIEW OPERATIONS ────────────────────────────────────────────────────────
+def add_review(book_id: int, user_id: int, rating: int, review_text: str):
+    if not 1 <= rating <= 5:
+        return False, "Rating must be between 1 and 5."
+    conn = get_connection()
+    if not conn:
+        return False, "Database connection failed."
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id FROM transactions
+        WHERE book_id=%s AND requester_id=%s AND status='Completed'
+    """, (book_id, user_id))
+
+    if cursor.fetchone() is None:
+        conn.close()
+        return False, "You can only review books after completing an exchange."
+
+    try:
+        cursor.execute("""
+            INSERT INTO reviews (book_id, user_id, rating, review)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE rating=%s, review=%s
+        """, (book_id, user_id, rating, review_text.strip(),
+              rating, review_text.strip()))
+        conn.commit()
+        return True, "Review submitted successfully!"
+    except mysql.connector.Error as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_book_reviews(book_id: int):
+    conn = get_connection()
+    if not conn:
+        return []
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT u.name AS reviewer, r.user_id, r.rating, r.review, r.created_at
+        FROM reviews r
+        JOIN users u ON r.user_id = u.id
+        WHERE r.book_id = %s
+        ORDER BY r.created_at DESC
+    """, (book_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def get_all_reviews():
+    conn = get_connection()
+    if not conn:
+        return []
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT b.title, u.name AS reviewer, r.rating, r.review, r.created_at
+        FROM reviews r
+        JOIN books b ON r.book_id = b.id
+        JOIN users u ON r.user_id = u.id
+        ORDER BY r.created_at DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def user_already_reviewed(book_id: int, user_id: int) -> bool:
+    conn = get_connection()
+    if not conn:
+        return False
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id FROM reviews WHERE book_id=%s AND user_id=%s",
+        (book_id, user_id)
+    )
+    exists = cursor.fetchone() is not None
+    conn.close()
+    return exists
 
 # ─── TRANSACTION OPERATIONS ───────────────────────────────────────────────────
 def request_exchange(book_id: int, requester_id: int):
     conn = get_connection()
+    if not conn:
+        return False, "Database connection failed."
     cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT owner_id, is_available FROM books WHERE id=%s", (book_id,))
-    book = cursor.fetchone()
-    if not book:
-        conn.close()
-        return False, "Book not found."
-    if not book["is_available"]:
-        conn.close()
-        return False, "Book is no longer available."
-    if book["owner_id"] == requester_id:
-        conn.close()
-        return False, "You cannot request your own book."
 
-    cursor.execute(
-        "INSERT INTO transactions (book_id, requester_id, owner_id) VALUES (%s,%s,%s)",
-        (book_id, requester_id, book["owner_id"])
-    )
-    cursor.execute("UPDATE books SET is_available=0 WHERE id=%s", (book_id,))
-    conn.commit()
-    conn.close()
-    return True, "Exchange request sent!"
+    try:
+        conn.start_transaction()
 
+        # Prevent duplicate pending requests
+        cursor.execute("""
+            SELECT id FROM transactions
+            WHERE book_id=%s AND requester_id=%s AND status='Pending'
+        """, (book_id, requester_id))
+        if cursor.fetchone():
+            conn.rollback()
+            return False, "You already have a pending request for this book."
+
+        cursor.execute(
+            "SELECT owner_id, is_available FROM books WHERE id=%s FOR UPDATE",
+            (book_id,)
+        )
+        book = cursor.fetchone()
+
+        if not book:
+            conn.rollback()
+            return False, "Book not found."
+        if not book["is_available"]:
+            conn.rollback()
+            return False, "Book is no longer available."
+        if book["owner_id"] == requester_id:
+            conn.rollback()
+            return False, "You cannot request your own book."
+
+        cursor.execute(
+            "INSERT INTO transactions (book_id, requester_id, owner_id) VALUES (%s,%s,%s)",
+            (book_id, requester_id, book["owner_id"])
+        )
+
+        
+        conn.commit()
+        return True, "Exchange request sent!"
+
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
 
 def get_user_transactions(user_id: int):
     conn = get_connection()
+    if not conn:
+        return []
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-        SELECT t.id, b.title, b.author,
-               req.name AS requester, own.name AS owner,
-               t.status, t.created_at
+        SELECT t.id,
+               b.id AS book_id,
+               b.title,
+               b.author,
+               req.name AS requester,
+               own.name AS owner,
+               t.status,
+               t.created_at
         FROM transactions t
         JOIN books b   ON t.book_id      = b.id
         JOIN users req ON t.requester_id = req.id
@@ -263,24 +449,35 @@ def get_user_transactions(user_id: int):
     conn.close()
     return rows
 
-
 def update_transaction_status(transaction_id: int, status: str, book_id: int):
     conn = get_connection()
+    if not conn:
+        return
     cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE transactions SET status=%s WHERE id=%s", (status, transaction_id)
-    )
-    if status in ("Rejected", "Completed"):
-        cursor.execute("UPDATE books SET is_available=1 WHERE id=%s", (book_id,))
-    conn.commit()
-    conn.close()
+    try:
+        cursor.execute(
+            "UPDATE transactions SET status=%s WHERE id=%s",
+            (status, transaction_id)
+        )
+        # Restore availability when Rejected or Completed
+       # When approved → make book unavailable
+        if status == "Approved":
+            cursor.execute("UPDATE books SET is_available=0 WHERE id=%s", (book_id,))
 
+        # When rejected or completed → make available again
+        elif status in ("Rejected", "Completed"):
+            cursor.execute("UPDATE books SET is_available=1 WHERE id=%s", (book_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_all_transactions():
     conn = get_connection()
+    if not conn:
+        return []
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-        SELECT t.id, b.title, b.author,
+        SELECT t.id, b.id AS book_id, b.title, b.author,
                req.name AS requester, own.name AS owner,
                t.status, t.created_at
         FROM transactions t
@@ -292,3 +489,22 @@ def get_all_transactions():
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def get_books_reviewed_by_user(user_id: int):
+    conn = get_connection()
+    if not conn:
+        return []
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT b.id, b.title, b.author, b.genre,
+               r.rating, r.review, r.created_at
+        FROM reviews r
+        JOIN books b ON r.book_id = b.id
+        WHERE r.user_id = %s
+        ORDER BY r.created_at DESC
+    """, (user_id,))
+
+    data = cursor.fetchall()
+    conn.close()
+    return data
