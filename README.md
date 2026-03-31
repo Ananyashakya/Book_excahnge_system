@@ -2,7 +2,6 @@
 
 BookSwap is a desktop-based application that allows users to exchange books through a structured request and approval system. The project is built using Python and MySQL, with a focus on clean design, secure authentication, and a smooth user experience.
 
----
 
 ## Overview
 
@@ -10,7 +9,6 @@ The application provides a simple and organized way for users to share books wit
 
 The system is designed to reflect real-world logic rather than just basic CRUD operations.
 
----
 
 ## Features
 
@@ -23,8 +21,6 @@ The system is designed to reflect real-world logic rather than just basic CRUD o
 - Track the status of all transactions  
 - Submit ratings and reviews after completing an exchange  
 
----
-
 ### Admin Functionality
 
 - View all registered users  
@@ -32,7 +28,6 @@ The system is designed to reflect real-world logic rather than just basic CRUD o
 - Approve, reject, or complete exchange requests  
 - Monitor the complete transaction history  
 
----
 
 ## Security and Data Handling
 
@@ -42,8 +37,6 @@ The system is designed to reflect real-world logic rather than just basic CRUD o
 - Input validation is applied across forms and operations  
 - Sensitive information such as passwords is never exposed  
 
----
-
 ## Tech Stack
 
 - Python (core logic)  
@@ -52,10 +45,7 @@ The system is designed to reflect real-world logic rather than just basic CRUD o
 - mysql-connector-python (database connectivity)  
 - bcrypt (authentication security)  
 
----
 
-
----
 
 ## Database Structure
 
@@ -66,7 +56,6 @@ The application uses the following core tables:
 - transactions — manages exchange requests and their status  
 - reviews — stores user ratings and feedback  
 
----
 
 ## Project Structure
     ```
@@ -77,14 +66,12 @@ The application uses the following core tables:
     ├── seed_books.sql
     └── README.md
 
----
 
 ## Default Admin Access
 
 Email: admin@bookexchange.com  
 Password: Admin@2025!  
 
----
 
 ## Conclusion
 
